@@ -31,7 +31,21 @@ def weights_init_normal(m):
     elif classname.find("BatchNorm2d") != -1:
         torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0.0)
-
+        
+def initialize_weights_and_biases(module, initWeights, initBiases, initConf):
+    if initWeights and 'weights' in initConf.keys():
+        if initConf['weights']['init'] == 'normal':
+            torch.nn.init.normal_(module.weight.data, initConf['weights']['mean'], initConf['weights']['var'])
+        else:
+            raise ValueError("Intitalization weights scheme {} not implemented".format(initConf['weights']['init']))
+            
+    if initBiases and 'biases' in initConf.keys():
+        if initConf['biases']['init'] == 'normal':
+            torch.nn.init.normal_(module.bias.data, initConf['biases']['mean'], initConf['biases']['var'])
+        elif initConf['biases']['init'] == 'const':
+            torch.nn.init.constant_(module.bias.data, initConf['biases']['val'])
+        else:
+            raise ValueError("Intitalization biases scheme {} not implemented".format(initConf['biases']['init']))
 
 def rescale_boxes(boxes, current_dim, original_shape):
     """ Rescales bounding boxes to the original shape """

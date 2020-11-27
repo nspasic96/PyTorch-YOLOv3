@@ -34,3 +34,20 @@ def parse_data_config(path):
         key, value = line.split('=')
         options[key.strip()] = value.strip()
     return options
+
+def parse_initialization_config(init_conv, init_bn):
+    initConf = {
+            'bn' : 
+            {
+             'weights' : 
+                {'init' : init_bn, 'mean' : 1, 'var' : 0.02},
+             'biases' :
+                {'init' : 'const', 'val' : 0}    
+            },          
+            'conv':
+            {
+             'weights' : 
+                {'init' : init_conv, 'mean' : 0, 'var' : 0.02}
+            }
+           }
+    return initConf

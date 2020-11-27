@@ -263,9 +263,21 @@ class Darknet(nn.Module):
         yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
         return yolo_outputs if targets is None else (loss, yolo_outputs)
 
-    def load_darknet_weights(self, weights_path):
+    def load_darknet_weights(self, weights_path, froms, tos, init_conf):
         """Parses and loads the weights stored in 'weights_path'"""
-
+        
+        # Mask for weights loading
+        layer_load = np.zeros(len(self.blocks[1:]), dtype=bool)
+        
+        assert(len(froms) == len(tos))
+        for i in range(len(froms)):
+            if tos[i] < 0:
+                tos[i] = len(self.blocks[1:])+tos[i]
+            for j in range(froms[i], tos[i]+1):
+                layer_load[j] = True
+        
+        print("Loading {} layers : {}".format(layer_load.sum(), layer_load))        
+        
         # Open the weights file
         with open(weights_path, "rb") as f:
             header = np.fromfile(f, dtype=np.int32, count=5)  # First five are header values
@@ -279,6 +291,8 @@ class Darknet(nn.Module):
             cutoff = 75
 
         ptr = 0
+        weights_skipped = 0
+        conv_layers_skipped = []
         for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
             if i == cutoff:
                 break
@@ -288,33 +302,55 @@ class Darknet(nn.Module):
                     # Load BN bias, weights, running mean and running variance
                     bn_layer = module[1]
                     num_b = bn_layer.bias.numel()  # Number of biases
-                    # Bias
-                    bn_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.bias)
-                    bn_layer.bias.data.copy_(bn_b)
-                    ptr += num_b
-                    # Weight
-                    bn_w = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.weight)
-                    bn_layer.weight.data.copy_(bn_w)
-                    ptr += num_b
-                    # Running Mean
-                    bn_rm = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_mean)
-                    bn_layer.running_mean.data.copy_(bn_rm)
-                    ptr += num_b
-                    # Running Var
-                    bn_rv = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_var)
-                    bn_layer.running_var.data.copy_(bn_rv)
-                    ptr += num_b
+                    
+                    if layer_load[i]:                        
+                        # Bias
+                        bn_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.bias)
+                        bn_layer.bias.data.copy_(bn_b)
+                        ptr += num_b
+                        # Weight
+                        bn_w = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.weight)
+                        bn_layer.weight.data.copy_(bn_w)
+                        ptr += num_b
+                        # Running Mean
+                        bn_rm = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_mean)
+                        bn_layer.running_mean.data.copy_(bn_rm)
+                        ptr += num_b
+                        # Running Var
+                        bn_rv = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_var)
+                        bn_layer.running_var.data.copy_(bn_rv)
+                        ptr += num_b
+                        
+                    else:
+                        ptr = ptr + 4*num_b
+                        weights_skipped += 4*num_b
+                        initialize_weights_and_biases(bn, initWeights = True, initBiases = False, init_conf = init_conf['bn'])
+                        
                 else:
-                    # Load conv. bias
-                    num_b = conv_layer.bias.numel()
-                    conv_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(conv_layer.bias)
-                    conv_layer.bias.data.copy_(conv_b)
-                    ptr += num_b
+                    if layer_load[i]:
+                        # Load conv. bias
+                        num_b = conv_layer.bias.numel()
+                        conv_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(conv_layer.bias)
+                        conv_layer.bias.data.copy_(conv_b)
+                        ptr += num_b
+                    else:
+                        ptr = ptr + num_b
+                        weights_skipped += num_b
+                        
+                        
                 # Load conv. weights
                 num_w = conv_layer.weight.numel()
-                conv_w = torch.from_numpy(weights[ptr : ptr + num_w]).view_as(conv_layer.weight)
-                conv_layer.weight.data.copy_(conv_w)
-                ptr += num_w
+                if layer_load[i]:
+                    conv_w = torch.from_numpy(weights[ptr : ptr + num_w]).view_as(conv_layer.weight)
+                    conv_layer.weight.data.copy_(conv_w)
+                    ptr += num_w
+                else:
+                    ptr = ptr + num_w
+                    weights_skipped += num_w
+                    convLayersSkipped.extend([i])
+                    initialize_weights_and_biases(conv, initWeights = True, initBiases = ~module_def["batch_normalize"], init_conf = init_conf['conv'])
+        
+        return weights_skipped, conv_layers_skipped                    
 
     def save_darknet_weights(self, path, cutoff=-1):
         """

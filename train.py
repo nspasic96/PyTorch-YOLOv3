@@ -14,6 +14,7 @@ import sys
 import time
 import datetime
 import argparse
+import json
 
 import torch
 from torch.utils.data import DataLoader
@@ -29,6 +30,7 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_accumulations", type=int, default=2, help="number of gradient accums before step")
     parser.add_argument("--model_def", type=str, default="config/yolov3.cfg", help="path to model definition file")
     parser.add_argument("--data_config", type=str, default="config/coco.data", help="path to data config file")
+    parser.add_argument("--log_dir", help = "Directory to store logs", default = "./logs/{}".format(time.strftime("%d%b%Y_%H_%M_%S")), type = str)
     parser.add_argument("--pretrained_weights", type=str, help="if specified starts from checkpoint model")
     parser.add_argument("--n_cpu", type=int, default=8, help="number of cpu threads to use during batch generation")
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
@@ -36,10 +38,17 @@ if __name__ == "__main__":
     parser.add_argument("--evaluation_interval", type=int, default=1, help="interval evaluations on validation set")
     parser.add_argument("--compute_map", default=False, help="if True computes mAP every tenth batch")
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
+    
+    parser.add_argument("--opt_name", help = "Name of the optimizer. Currently supported : Adam", default = "Adam", choices=["Adam"])
+    parser.add_argument("--load_weights_froms", help = "First layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [0,13])
+    parser.add_argument("--load_weights_tos", help = "Last layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [101,-4])
+    parser.add_argument("--init_bn", help = "Which initialization to use for skipped batch norm layers", type=str, default = "normal", choices=["normal"])
+    parser.add_argument("--init_conv", help = "Which initialization to use for skipped conv layers", type=str, default = "normal", choices=["normal"])
+
     opt = parser.parse_args()
     print(opt)
 
-    logger = Logger("logs")
+    logger = Logger(opt.log_dir)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -52,17 +61,29 @@ if __name__ == "__main__":
     valid_path = data_config["valid"]
     class_names = load_classes(data_config["names"])
 
+    #this initialization configuration is applied only when weights are loaded from non .pth file
+    init_conf = parse_initialization_config(opt.init_conv, opt.init_bn)
+
     # Initiate model
     model = Darknet(opt.model_def).to(device)
-    model.apply(weights_init_normal)
 
     # If specified we start from checkpoint
     if opt.pretrained_weights:
         if opt.pretrained_weights.endswith(".pth"):
             model.load_state_dict(torch.load(opt.pretrained_weights))
         else:
-            model.load_darknet_weights(opt.pretrained_weights)
-
+            weights_skipped, conv_layers_skipped = model.load_darknet_weights(opt.pretrained_weights, opt.froms, opt.tos, init_conf)
+            
+            if weights_skipped > 0:
+                opt.__dict__["skipped_message"] = "{} skipped weights in layers {}".format(weights_skipped, conv_layers_skipped)
+        print("Model loaded")
+    else:        
+        model.apply(weights_init_normal)
+        print("Model initialized")
+    
+    with open(os.path.join(opt.log_dir,'commandline_args.txt'), 'w+') as f:
+        json.dump(opt.__dict__, f, indent=2)
+        
     # Get dataloader
     dataset = ListDataset(train_path, augment=True, multiscale=opt.multiscale_training)
     dataloader = torch.utils.data.DataLoader(
@@ -73,8 +94,11 @@ if __name__ == "__main__":
         pin_memory=True,
         collate_fn=dataset.collate_fn,
     )
-
-    optimizer = torch.optim.Adam(model.parameters())
+   
+    if opt.opt_name == "Adam":
+        optimizer = torch.optim.Adam(model.parameters())
+    else: 
+        raise ValueError("optimizer {} is not supported".format(opt.opt_name))
 
     metrics = [
         "grid_size",
@@ -173,6 +197,11 @@ if __name__ == "__main__":
                 ap_table += [[c, class_names[c], "%.5f" % AP[i]]]
             print(AsciiTable(ap_table).table)
             print(f"---- mAP {AP.mean()}")
+            with open(os.path.join(opt.log_dir,'evaluation_epoch_{}'.format(epoch)), 'w+') as f:
+                f.write(AsciiTable(ap_table).table)
+                for em in evaluation_metrics:
+                    f.write("\n{} : {}".format(em[0], em[1]))
+        
 
         if epoch % opt.checkpoint_interval == 0:
             torch.save(model.state_dict(), f"checkpoints/yolov3_ckpt_%d.pth" % epoch)
