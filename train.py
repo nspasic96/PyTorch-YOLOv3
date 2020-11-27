@@ -24,13 +24,15 @@ from torch.autograd import Variable
 import torch.optim as optim
 
 if __name__ == "__main__":
+    thisSecond = time.strftime("%d%b%Y_%H_%M_%S")
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
     parser.add_argument("--batch_size", type=int, default=8, help="size of each image batch")
     parser.add_argument("--gradient_accumulations", type=int, default=2, help="number of gradient accums before step")
     parser.add_argument("--model_def", type=str, default="config/yolov3.cfg", help="path to model definition file")
     parser.add_argument("--data_config", type=str, default="config/coco.data", help="path to data config file")
-    parser.add_argument("--log_dir", help = "Directory to store logs", default = "./logs/{}".format(time.strftime("%d%b%Y_%H_%M_%S")), type = str)
+    parser.add_argument("--log_dir", help = "Directory to store logs", default = "./logs/{}".format(thisSecond), type = str)
+    parser.add_argument("--ckpt_dir", help = "Directory to store checkpoints", default = "./checkpoints/{}".format(thisSecond), type = str)
     parser.add_argument("--pretrained_weights", type=str, help="if specified starts from checkpoint model")
     parser.add_argument("--n_cpu", type=int, default=8, help="number of cpu threads to use during batch generation")
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
@@ -40,8 +42,8 @@ if __name__ == "__main__":
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
     
     parser.add_argument("--opt_name", help = "Name of the optimizer. Currently supported : Adam", default = "Adam", choices=["Adam"])
-    parser.add_argument("--load_weights_froms", help = "First layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [0,13])
-    parser.add_argument("--load_weights_tos", help = "Last layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [101,-4])
+    parser.add_argument("--load_weights_froms", help = "First layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [0])
+    parser.add_argument("--load_weights_tos", help = "Last layers of blocks for which weights are loaded (0-based indexing)", nargs="+", type=int, default = [-1])
     parser.add_argument("--init_bn", help = "Which initialization to use for skipped batch norm layers", type=str, default = "normal", choices=["normal"])
     parser.add_argument("--init_conv", help = "Which initialization to use for skipped conv layers", type=str, default = "normal", choices=["normal"])
 
@@ -53,7 +55,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     os.makedirs("output", exist_ok=True)
-    os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs(opt.ckpt_dir, exist_ok=True)
 
     # Get data configuration
     data_config = parse_data_config(opt.data_config)
@@ -204,4 +206,4 @@ if __name__ == "__main__":
         
 
         if epoch % opt.checkpoint_interval == 0:
-            torch.save(model.state_dict(), f"checkpoints/yolov3_ckpt_%d.pth" % epoch)
+            torch.save(model.state_dict(), os.path.join(opt.ckpt_dir, "yolov3_ckpt_{}.pth".format(epoch)))
